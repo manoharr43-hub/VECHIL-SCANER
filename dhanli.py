@@ -1,3 +1,3 @@
-git add requirements.txt
-git commit -m "Fix: use opencv-python-headless only"
+git add requirements.txt runtime.txt
+git commit -m "Fix: use Python 3.11 and compatible deps"
 git push origin main
