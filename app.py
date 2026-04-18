@@ -149,3 +149,4 @@ if video and st.session_state.run:
         )
     else:
         st.warning("No objects detected.")
+python-3.11
