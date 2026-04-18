@@ -2,6 +2,8 @@ import streamlit as st
 import cv2
 import numpy as np
 import pandas as pd
+import tempfile
+import os
 
 st.set_page_config(page_title="🚗 Vehicle Wire Video Scanner", layout="wide")
 st.title("🔌 Vehicle Wire Continuity Screener (Video + Report)")
@@ -17,9 +19,9 @@ video_file = st.file_uploader("Upload Vehicle Inspection Video", type=["mp4", "a
 def detect_wire_cut(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150)
-    # Simple heuristic: if too few edges, assume cut/damage
     edge_count = np.sum(edges > 0)
-    if edge_count < 5000:   # threshold tune చేయాలి
+    # Threshold heuristic: tune as needed
+    if edge_count < 5000:
         return "CUT / DAMAGE", "red"
     else:
         return "NORMAL", "green"
@@ -29,7 +31,12 @@ def detect_wire_cut(frame):
 # =============================
 report_data = []
 if video_file is not None:
-    cap = cv2.VideoCapture(video_file.name)
+    # Save uploaded file to temp location
+    temp_video = tempfile.NamedTemporaryFile(delete=False)
+    temp_video.write(video_file.read())
+    temp_video.close()
+
+    cap = cv2.VideoCapture(temp_video.name)
     frame_id = 0
     while cap.isOpened():
         ret, frame = cap.read()
@@ -39,6 +46,7 @@ if video_file is not None:
         report_data.append({"Frame": frame_id, "Status": status})
         frame_id += 1
     cap.release()
+    os.remove(temp_video.name)
 
     # =============================
     # Report Display
