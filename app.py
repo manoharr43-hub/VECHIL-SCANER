@@ -5,8 +5,8 @@ import pandas as pd
 import tempfile
 import os
 
-st.set_page_config(page_title="🔥 Wire Scanner ULTIMATE", layout="wide")
-st.title("🚗 Smart Wire Scanner (ALL-IN-ONE PRO)")
+st.set_page_config(page_title="🔥 Wire Scanner PRO MAX", layout="wide")
+st.title("🚗 Smart Wire Scanner (Damage Location AI)")
 
 # =============================
 # SIDEBAR - INTERNAL TEST
@@ -24,7 +24,7 @@ continuity = st.sidebar.selectbox(
 video_file = st.file_uploader("Upload Inspection Video", type=["mp4", "avi", "mov"])
 
 # =============================
-# CREATE SCREENSHOT FOLDER
+# FOLDER CREATE
 # =============================
 if not os.path.exists("damage_frames"):
     os.makedirs("damage_frames")
@@ -40,34 +40,52 @@ def detect_wire(frame, frame_id):
 
     edges = cv2.Canny(gray, 50, 150)
 
-    edge_count = np.sum(edges > 0)
+    kernel = np.ones((3,3), np.uint8)
+    edges = cv2.dilate(edges, kernel, iterations=1)
 
-    # Find contours (for location)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Default
     status = "OUTER OK"
     color = (0, 255, 0)
+    damage_boxes = []
 
-    if edge_count < 4000:
-        status = "OUTER DAMAGE"
-        color = (0, 0, 255)
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
 
-        # 📍 Draw bounding box
-        for cnt in contours:
+        if area > 800:  # filter noise
             x, y, w, h = cv2.boundingRect(cnt)
-            if w*h > 500:  # filter small noise
+
+            # abnormal small/long shape = possible break
+            if w < 100 or h < 50:
+                status = "OUTER DAMAGE"
+                color = (0, 0, 255)
+
+                cx = x + w // 2
+                cy = y + h // 2
+
+                damage_boxes.append((x, y, w, h, cx, cy))
+
+                # draw box
                 cv2.rectangle(frame_resized, (x,y), (x+w,y+h), (0,0,255), 2)
 
-        # 📸 Save screenshot
+                # label
+                cv2.putText(frame_resized, "Damage", (x, y-5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
+
+                # center point
+                cv2.circle(frame_resized, (cx, cy), 4, (255,0,0), -1)
+
+    # save screenshot if damage
+    if status == "OUTER DAMAGE":
         cv2.imwrite(f"damage_frames/frame_{frame_id}.jpg", frame_resized)
 
-    return status, color, frame_resized
+    return status, color, frame_resized, damage_boxes
 
 # =============================
 # PROCESS VIDEO
 # =============================
 report_data = []
+damage_flags = []
 
 if video_file is not None:
     temp_video = tempfile.NamedTemporaryFile(delete=False)
@@ -79,8 +97,6 @@ if video_file is not None:
     frame_id = 0
     display = st.empty()
 
-    damage_flag_list = []
-
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -90,24 +106,42 @@ if video_file is not None:
             frame_id += 1
             continue
 
-        status, color, output_frame = detect_wire(frame, frame_id)
+        status, color, output_frame, boxes = detect_wire(frame, frame_id)
 
         damage_flag = 1 if status == "OUTER DAMAGE" else 0
-        damage_flag_list.append(damage_flag)
+        damage_flags.append(damage_flag)
 
-        report_data.append({
-            "Frame": frame_id,
-            "Outer Status": status
-        })
+        if boxes:
+            for (x, y, w, h, cx, cy) in boxes:
+                report_data.append({
+                    "Frame": frame_id,
+                    "Status": status,
+                    "X": x,
+                    "Y": y,
+                    "Width": w,
+                    "Height": h,
+                    "Center_X": cx,
+                    "Center_Y": cy
+                })
+        else:
+            report_data.append({
+                "Frame": frame_id,
+                "Status": status,
+                "X": None,
+                "Y": None,
+                "Width": None,
+                "Height": None,
+                "Center_X": None,
+                "Center_Y": None
+            })
 
-        # 🚨 ALERT
+        # ALERT
         if status == "OUTER DAMAGE":
             st.warning(f"⚠️ Damage detected at frame {frame_id}")
 
-        # Display
+        # display
         cv2.putText(output_frame, status, (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1,
-                    color, 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
         display.image(output_frame, channels="BGR")
 
@@ -120,9 +154,9 @@ if video_file is not None:
     st.dataframe(df)
 
     # =============================
-    # FINAL LOGIC
+    # FINAL DECISION
     # =============================
-    outer_damage = len(df[df["Outer Status"] == "OUTER DAMAGE"])
+    outer_damage = len(df[df["Status"] == "OUTER DAMAGE"])
 
     if continuity == "FAILED":
         final_status = "🔴 INTERNAL DAMAGE (CRITICAL)"
@@ -146,37 +180,37 @@ if video_file is not None:
     # GRAPH
     # =============================
     st.subheader("📈 Damage Timeline")
-    chart_df = pd.DataFrame({"Damage": damage_flag_list})
-    st.line_chart(chart_df)
+    st.line_chart(pd.DataFrame({"Damage": damage_flags}))
 
     # =============================
-    # DOWNLOAD CSV
+    # DOWNLOAD
     # =============================
     st.download_button(
-        "⬇️ Download Report CSV",
+        "⬇️ Download CSV",
         df.to_csv(index=False).encode("utf-8"),
         "wire_report.csv",
         "text/csv"
     )
 
     # =============================
-    # SHOW SAVED IMAGES
+    # SHOW IMAGES
     # =============================
     st.subheader("📸 Damage Screenshots")
 
-    image_files = os.listdir("damage_frames")
-    for img in image_files[:5]:  # show first 5
+    images = os.listdir("damage_frames")
+    for img in images[:5]:
         st.image(f"damage_frames/{img}")
 
     # =============================
     # SUMMARY
     # =============================
     st.markdown(f"""
-    ### 📋 Final Summary (Telugu + English)
+    ### 📋 Summary (Telugu + English)
 
     - బయట డ్యామేజ్ ఫ్రేమ్స్: {outer_damage}  
     - లోపల టెస్ట్: {continuity}  
     - Final Result: {final_status}  
 
-    🚗 Complete smart analysis done.
+    📍 Damage location coordinates available in report  
+    🚗 Smart inspection completed
     """)
