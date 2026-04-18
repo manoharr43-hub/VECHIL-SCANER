@@ -1,4 +1,3 @@
-git add app.py requirements.txt
-git commit -m "Stable PRO+ version with headless OpenCV"
+git add requirements.txt
+git commit -m "Fix: use opencv-python-headless only"
 git push origin main
-
