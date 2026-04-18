@@ -1,6 +1,11 @@
 streamlit==1.56.0
-ultralytics==8.2.50
-opencv-python-headless==4.9.0.80
-pandas==2.2.2
-numpy==1.26.4
+ultralytics==8.0.196
+opencv-python-headless==4.8.1.78
+pandas==3.0.2
+numpy==2.4.4
 pyserial==3.5
+matplotlib==3.10.8
+scipy==1.17.1
+seaborn==0.13.2
+# 👇 Add this line for libGL fix
+pyglet==2.0.15
