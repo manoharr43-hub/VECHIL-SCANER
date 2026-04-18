@@ -7,5 +7,3 @@ pyserial==3.5
 matplotlib==3.10.8
 scipy==1.17.1
 seaborn==0.13.2
-# 👇 Add this line for libGL fix
-pyglet==2.0.15
