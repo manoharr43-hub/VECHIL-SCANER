@@ -5,37 +5,30 @@ import pandas as pd
 import tempfile
 import os
 
-st.set_page_config(page_title="🔥 Wire Scanner PRO MAX", layout="wide")
-st.title("🚗 Smart Wire Scanner (Damage Location AI)")
+st.set_page_config(page_title="🔥 Wire Scanner STABLE", layout="wide")
+st.title("🚗 Wire Scanner (Stable Detection Version)")
 
 # =============================
-# SIDEBAR - INTERNAL TEST
+# SIDEBAR
 # =============================
 st.sidebar.header("🔌 Internal Wire Test")
-
 continuity = st.sidebar.selectbox(
     "Continuity Test Result",
     ["NOT TESTED", "OK", "FAILED"]
 )
 
 # =============================
-# UPLOAD VIDEO
+# UPLOAD
 # =============================
-video_file = st.file_uploader("Upload Inspection Video", type=["mp4", "avi", "mov"])
-
-# =============================
-# FOLDER CREATE
-# =============================
-if not os.path.exists("damage_frames"):
-    os.makedirs("damage_frames")
+video_file = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
 # =============================
 # DETECTION FUNCTION
 # =============================
-def detect_wire(frame, frame_id):
-    frame_resized = cv2.resize(frame, (640, 360))
+def detect_wire(frame):
+    frame = cv2.resize(frame, (640, 360))
 
-    gray = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.equalizeHist(gray)
 
     edges = cv2.Canny(gray, 50, 150)
@@ -43,43 +36,30 @@ def detect_wire(frame, frame_id):
     kernel = np.ones((3,3), np.uint8)
     edges = cv2.dilate(edges, kernel, iterations=1)
 
+    edge_pixels = np.sum(edges > 0)
+    total_pixels = edges.size
+    edge_density = edge_pixels / total_pixels
+
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     status = "OUTER OK"
-    color = (0, 255, 0)
-    damage_boxes = []
+    boxes = []
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
 
-        if area > 800:  # filter noise
+        # 🔥 Strong filtering
+        if area > 1500:
             x, y, w, h = cv2.boundingRect(cnt)
 
-            # abnormal small/long shape = possible break
-            if w < 100 or h < 50:
+            ratio = w / h if h != 0 else 0
+
+            # 🔥 Shape + size filter
+            if (w < 80 or h < 40) and (0.2 < ratio < 5) and edge_density < 0.02:
                 status = "OUTER DAMAGE"
-                color = (0, 0, 255)
+                boxes.append((x, y, w, h))
 
-                cx = x + w // 2
-                cy = y + h // 2
-
-                damage_boxes.append((x, y, w, h, cx, cy))
-
-                # draw box
-                cv2.rectangle(frame_resized, (x,y), (x+w,y+h), (0,0,255), 2)
-
-                # label
-                cv2.putText(frame_resized, "Damage", (x, y-5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
-
-                # center point
-                cv2.circle(frame_resized, (cx, cy), 4, (255,0,0), -1)
-
-    # save screenshot if damage
-    if status == "OUTER DAMAGE":
-        cv2.imwrite(f"damage_frames/frame_{frame_id}.jpg", frame_resized)
-
-    return status, color, frame_resized, damage_boxes
+    return status, boxes, frame
 
 # =============================
 # PROCESS VIDEO
@@ -97,6 +77,8 @@ if video_file is not None:
     frame_id = 0
     display = st.empty()
 
+    damage_streak = 0  # 🔥 continuous detection
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -106,44 +88,45 @@ if video_file is not None:
             frame_id += 1
             continue
 
-        status, color, output_frame, boxes = detect_wire(frame, frame_id)
+        status, boxes, output_frame = detect_wire(frame)
 
-        damage_flag = 1 if status == "OUTER DAMAGE" else 0
+        # =============================
+        # 🔥 STABILITY LOGIC
+        # =============================
+        if status == "OUTER DAMAGE":
+            damage_streak += 1
+        else:
+            damage_streak = 0
+
+        confirmed = damage_streak >= 3
+
+        final_status = "OUTER DAMAGE" if confirmed else "OUTER OK"
+
+        damage_flag = 1 if confirmed else 0
         damage_flags.append(damage_flag)
 
-        if boxes:
-            for (x, y, w, h, cx, cy) in boxes:
-                report_data.append({
-                    "Frame": frame_id,
-                    "Status": status,
-                    "X": x,
-                    "Y": y,
-                    "Width": w,
-                    "Height": h,
-                    "Center_X": cx,
-                    "Center_Y": cy
-                })
-        else:
-            report_data.append({
-                "Frame": frame_id,
-                "Status": status,
-                "X": None,
-                "Y": None,
-                "Width": None,
-                "Height": None,
-                "Center_X": None,
-                "Center_Y": None
-            })
+        # =============================
+        # DRAW BOX ONLY IF CONFIRMED
+        # =============================
+        if confirmed:
+            for (x, y, w, h) in boxes:
+                cv2.rectangle(output_frame, (x,y), (x+w,y+h), (0,0,255), 2)
 
-        # ALERT
-        if status == "OUTER DAMAGE":
-            st.warning(f"⚠️ Damage detected at frame {frame_id}")
+            # alert only once per streak
+            if damage_streak == 3:
+                st.warning(f"⚠️ Confirmed Damage at frame {frame_id}")
 
-        # display
-        cv2.putText(output_frame, status, (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+        # display text
+        cv2.putText(output_frame, final_status, (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1,
+                    (0,0,255) if confirmed else (0,255,0), 2)
 
         display.image(output_frame, channels="BGR")
+
+        report_data.append({
+            "Frame": frame_id,
+            "Status": final_status
+        })
 
         frame_id += 1
 
@@ -159,9 +142,9 @@ if video_file is not None:
     outer_damage = len(df[df["Status"] == "OUTER DAMAGE"])
 
     if continuity == "FAILED":
-        final_status = "🔴 INTERNAL DAMAGE (CRITICAL)"
+        final_status = "🔴 INTERNAL DAMAGE"
     elif outer_damage > 5:
-        final_status = "🟠 OUTER DAMAGE DETECTED"
+        final_status = "🟠 OUTER DAMAGE"
     elif continuity == "OK":
         final_status = "🟢 FULLY OK"
     else:
@@ -193,24 +176,15 @@ if video_file is not None:
     )
 
     # =============================
-    # SHOW IMAGES
-    # =============================
-    st.subheader("📸 Damage Screenshots")
-
-    images = os.listdir("damage_frames")
-    for img in images[:5]:
-        st.image(f"damage_frames/{img}")
-
-    # =============================
     # SUMMARY
     # =============================
     st.markdown(f"""
-    ### 📋 Summary (Telugu + English)
+    ### 📋 Summary
 
     - బయట డ్యామేజ్ ఫ్రేమ్స్: {outer_damage}  
     - లోపల టెస్ట్: {continuity}  
     - Final Result: {final_status}  
 
-    📍 Damage location coordinates available in report  
-    🚗 Smart inspection completed
+    ✅ False detection minimized  
+    ✅ Stable detection applied
     """)
