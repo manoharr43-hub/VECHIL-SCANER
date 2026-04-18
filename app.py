@@ -4,13 +4,24 @@ import cv2
 import tempfile
 import pandas as pd
 
-st.set_page_config(page_title="Vehicle AI System", layout="wide")
-st.title("🚗 Vehicle AI Scanner (PRO)")
+# =============================
+# CONFIG
+# =============================
+st.set_page_config(page_title="Vehicle AI System PRO", layout="wide")
+st.title("🚗 Vehicle AI Scanner PRO (FAST MODE)")
 
-# Load model once
-model = YOLO("best.pt")
+# Load model only once (IMPORTANT SPEED FIX)
+@st.cache_resource
+def load_model():
+    return YOLO("best.pt")
 
+model = load_model()
+
+# Upload video
 video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
+
+# STOP BUTTON
+stop = st.button("🛑 Stop Processing")
 
 if video:
     temp = tempfile.NamedTemporaryFile(delete=False)
@@ -27,16 +38,24 @@ if video:
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+    # =============================
+    # PROCESS VIDEO
+    # =============================
     while cap.isOpened():
+        if stop:
+            st.warning("Processing Stopped by User")
+            break
+
         ret, frame = cap.read()
         if not ret:
             break
 
-        results = model(frame, verbose=False)
+        # FAST YOLO INFERENCE
+        results = model(frame, imgsz=640, conf=0.5, verbose=False)
         result = results[0]
         output = result.plot()
 
-        # SAFE detection handling
+        # SAFE DETECTION
         if result.boxes is not None and len(result.boxes) > 0:
             boxes = result.boxes.data.cpu().numpy()
 
@@ -51,19 +70,26 @@ if video:
                     "y2": float(box[3]),
                 })
 
-        # Show frame every 5th frame (faster UI)
-        if frame_id % 5 == 0:
+        # SHOW ONLY EVERY 15th FRAME (FAST UI)
+        if frame_id % 15 == 0:
             stframe.image(output, channels="BGR", use_container_width=True)
 
         frame_id += 1
 
-        # progress bar update
+        # PROGRESS BAR
         if total_frames > 0:
             progress.progress(min(frame_id / total_frames, 1.0))
 
+        # LIMIT (PREVENT FREEZE)
+        if frame_id > 300:
+            st.warning("Max frame limit reached (FAST MODE)")
+            break
+
     cap.release()
 
-    # DataFrame
+    # =============================
+    # REPORT
+    # =============================
     df = pd.DataFrame(logs)
 
     st.subheader("📊 Detection Report")
@@ -78,4 +104,4 @@ if video:
             "text/csv"
         )
     else:
-        st.warning("No objects detected in video.")
+        st.warning("No detections found.")
