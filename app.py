@@ -2,6 +2,7 @@ import streamlit as st
 from ultralytics import YOLO
 import cv2
 import tempfile
+import os
 import pandas as pd
 
 # =============================
@@ -24,6 +25,7 @@ def load_model():
     return YOLO("best.pt")
 
 model = load_model()
+CLASS_NAMES = model.names
 
 # =============================
 # UPLOAD VIDEO
@@ -60,7 +62,6 @@ if video and st.session_state.run:
 
     logs = []
     frame_id = 0
-
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     st.info("Processing started... 🚀")
@@ -87,6 +88,7 @@ if video and st.session_state.run:
                 logs.append({
                     "frame": frame_id,
                     "class_id": int(box[5]),
+                    "class_name": CLASS_NAMES[int(box[5])],
                     "confidence": float(box[4]),
                     "x1": float(box[0]),
                     "y1": float(box[1]),
@@ -109,6 +111,7 @@ if video and st.session_state.run:
             break
 
     cap.release()
+    os.remove(temp_path)  # ✅ Cleanup temp file
     st.success("Processing completed ✅")
 
     # =============================
@@ -119,6 +122,18 @@ if video and st.session_state.run:
     st.subheader("📊 Detection Report")
 
     if not df.empty:
+        # Bilingual headers
+        df.rename(columns={
+            "frame": "Frame (ఫ్రేమ్)",
+            "class_id": "Class ID (వర్గ ID)",
+            "class_name": "Class Name (వర్గం పేరు)",
+            "confidence": "Confidence (నమ్మకం)",
+            "x1": "X1 (ఎక్స్1)",
+            "y1": "Y1 (వై1)",
+            "x2": "X2 (ఎక్స్2)",
+            "y2": "Y2 (వై2)"
+        }, inplace=True)
+
         st.dataframe(df)
 
         st.download_button(
