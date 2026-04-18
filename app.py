@@ -6,147 +6,78 @@ import os
 import pandas as pd
 import torch
 
-# =============================
+# ============================= #
 # CONFIG
-# =============================
+# ============================= #
 st.set_page_config(page_title="Vehicle AI Scanner PRO+", layout="wide")
 st.title("🚗 Vehicle AI Scanner (ULTRA STABLE + FAST)")
 
-# =============================
+# ============================= #
 # STATE
-# =============================
+# ============================= #
 if "run" not in st.session_state:
     st.session_state.run = False
 
-# =============================
-# DEVICE SETUP (GPU BOOST)
-# =============================
+# ============================= #
+# DEVICE SETUP (CPU/GPU)
+# ============================= #
 device = "cuda" if torch.cuda.is_available() else "cpu"
+st.caption(f"Using device: **{device}**")
 
-# =============================
-# LOAD MODEL (OPTIMIZED)
-# =============================
+# ============================= #
+# LOAD MODEL
+# ============================= #
 @st.cache_resource
-def load_model():
-    model = YOLO("best.pt")
+def load_model(model_path: str = "best.pt"):
+    model = YOLO(model_path)
     model.to(device)
     return model
 
-model = load_model()
+try:
+    model = load_model()
+except Exception as e:
+    st.error(f"Error loading YOLO model: {e}")
+    st.stop()
+
 CLASS_NAMES = model.names
 
-# =============================
+# ============================= #
 # UPLOAD
-# =============================
+# ============================= #
 video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
-
 col1, col2 = st.columns(2)
-
 with col1:
-    if st.button("▶️ Start"):
+    if st.button("▶️ Start") and video is not None:
         st.session_state.run = True
-
 with col2:
     if st.button("🛑 Stop"):
         st.session_state.run = False
 
-# =============================
-# PROCESSING
-# =============================
-if video and st.session_state.run:
+if video is None:
+    st.info("Please upload a video to start.")
+    st.stop()
 
-    temp = tempfile.NamedTemporaryFile(delete=False)
-    temp.write(video.read())
-    temp_path = temp.name
+# ============================= #
+# PROCESSING
+# ============================= #
+if st.session_state.run:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        tmp.write(video.read())
+        temp_path = tmp.name
 
     cap = cv2.VideoCapture(temp_path)
+    if not cap.isOpened():
+        st.error("Could not open video file.")
+        os.remove(temp_path)
+        st.stop()
 
     stframe = st.empty()
     progress = st.progress(0)
-
     logs = []
     frame_id = 0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
 
-    st.info("🚀 Processing Started...")
+    st.info("🚀 Processing started...")
+    skip_frames = 3  # process every 3rd frame for speed
 
-    # SPEED OPTIMIZATION
-    skip_frames = 3  # increase speed
-
-    while cap.isOpened() and st.session_state.run:
-
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        # skip frames for speed
-        if frame_id % skip_frames != 0:
-            frame_id += 1
-            continue
-
-        # =============================
-        # YOLO INFERENCE (FAST MODE)
-        # =============================
-        results = model.predict(
-            frame,
-            imgsz=512,
-            conf=0.4,
-            device=device,
-            verbose=False
-        )
-
-        r = results[0]
-        output = r.plot()
-
-        if r.boxes is not None and len(r.boxes) > 0:
-            boxes = r.boxes.data.cpu().numpy()
-
-            for box in boxes:
-                logs.append({
-                    "frame": frame_id,
-                    "class_name": CLASS_NAMES[int(box[5])],
-                    "confidence": float(box[4]),
-                    "x1": float(box[0]),
-                    "y1": float(box[1]),
-                    "x2": float(box[2]),
-                    "y2": float(box[3]),
-                })
-
-        # UI update
-        if frame_id % 10 == 0:
-            stframe.image(output, channels="BGR", use_container_width=True)
-
-        frame_id += 1
-
-        if total_frames > 0:
-            progress.progress(min(frame_id / total_frames, 1.0))
-
-        # safety stop
-        if frame_id > 1000:
-            st.warning("⚠️ Frame limit reached (safe mode)")
-            break
-
-    cap.release()
-    os.remove(temp_path)
-
-    st.success("✅ Processing Completed")
-
-    # =============================
-    # REPORT
-    # =============================
-    df = pd.DataFrame(logs)
-
-    st.subheader("📊 Detection Report")
-
-    if not df.empty:
-        st.dataframe(df)
-
-        st.download_button(
-            "⬇️ Download CSV",
-            df.to_csv(index=False).encode(),
-            "vehicle_report.csv",
-            "text/csv"
-        )
-    else:
-        st.warning("No objects detected.")
-python-3.11
+    try:
