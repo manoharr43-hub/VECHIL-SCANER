@@ -4,47 +4,51 @@ import cv2
 import tempfile
 import os
 import pandas as pd
+import torch
 
 # =============================
 # CONFIG
 # =============================
-st.set_page_config(page_title="Vehicle AI Scanner PRO", layout="wide")
-st.title("🚗 Vehicle AI Scanner (STABLE PRO VERSION)")
+st.set_page_config(page_title="Vehicle AI Scanner PRO+", layout="wide")
+st.title("🚗 Vehicle AI Scanner (ULTRA STABLE + FAST)")
 
 # =============================
-# SESSION STATE CONTROL
+# STATE
 # =============================
 if "run" not in st.session_state:
     st.session_state.run = False
 
 # =============================
-# LOAD MODEL
+# DEVICE SETUP (GPU BOOST)
+# =============================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# =============================
+# LOAD MODEL (OPTIMIZED)
 # =============================
 @st.cache_resource
 def load_model():
-    return YOLO("best.pt")
+    model = YOLO("best.pt")
+    model.to(device)
+    return model
 
 model = load_model()
 CLASS_NAMES = model.names
 
 # =============================
-# UPLOAD VIDEO
+# UPLOAD
 # =============================
 video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
 col1, col2 = st.columns(2)
 
 with col1:
-    start = st.button("▶️ Start Processing")
+    if st.button("▶️ Start"):
+        st.session_state.run = True
 
 with col2:
-    stop = st.button("🛑 Stop")
-
-if start:
-    st.session_state.run = True
-
-if stop:
-    st.session_state.run = False
+    if st.button("🛑 Stop"):
+        st.session_state.run = False
 
 # =============================
 # PROCESSING
@@ -64,7 +68,10 @@ if video and st.session_state.run:
     frame_id = 0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    st.info("Processing started... 🚀")
+    st.info("🚀 Processing Started...")
+
+    # SPEED OPTIMIZATION
+    skip_frames = 3  # increase speed
 
     while cap.isOpened() and st.session_state.run:
 
@@ -72,22 +79,31 @@ if video and st.session_state.run:
         if not ret:
             break
 
-        # 🔥 SKIP FRAMES FOR SPEED
-        if frame_id % 2 != 0:
+        # skip frames for speed
+        if frame_id % skip_frames != 0:
             frame_id += 1
             continue
 
-        results = model(frame, imgsz=512, conf=0.4, verbose=False)
-        result = results[0]
-        output = result.plot()
+        # =============================
+        # YOLO INFERENCE (FAST MODE)
+        # =============================
+        results = model.predict(
+            frame,
+            imgsz=512,
+            conf=0.4,
+            device=device,
+            verbose=False
+        )
 
-        if result.boxes is not None and len(result.boxes) > 0:
-            boxes = result.boxes.data.cpu().numpy()
+        r = results[0]
+        output = r.plot()
+
+        if r.boxes is not None and len(r.boxes) > 0:
+            boxes = r.boxes.data.cpu().numpy()
 
             for box in boxes:
                 logs.append({
                     "frame": frame_id,
-                    "class_id": int(box[5]),
                     "class_name": CLASS_NAMES[int(box[5])],
                     "confidence": float(box[4]),
                     "x1": float(box[0]),
@@ -96,8 +112,8 @@ if video and st.session_state.run:
                     "y2": float(box[3]),
                 })
 
-        # UI update every 5 frames
-        if frame_id % 5 == 0:
+        # UI update
+        if frame_id % 10 == 0:
             stframe.image(output, channels="BGR", use_container_width=True)
 
         frame_id += 1
@@ -105,14 +121,15 @@ if video and st.session_state.run:
         if total_frames > 0:
             progress.progress(min(frame_id / total_frames, 1.0))
 
-        # Safety limit
-        if frame_id > 500:
-            st.warning("Frame limit reached (SAFE MODE)")
+        # safety stop
+        if frame_id > 1000:
+            st.warning("⚠️ Frame limit reached (safe mode)")
             break
 
     cap.release()
-    os.remove(temp_path)  # ✅ Cleanup temp file
-    st.success("Processing completed ✅")
+    os.remove(temp_path)
+
+    st.success("✅ Processing Completed")
 
     # =============================
     # REPORT
@@ -122,18 +139,6 @@ if video and st.session_state.run:
     st.subheader("📊 Detection Report")
 
     if not df.empty:
-        # Bilingual headers
-        df.rename(columns={
-            "frame": "Frame (ఫ్రేమ్)",
-            "class_id": "Class ID (వర్గ ID)",
-            "class_name": "Class Name (వర్గం పేరు)",
-            "confidence": "Confidence (నమ్మకం)",
-            "x1": "X1 (ఎక్స్1)",
-            "y1": "Y1 (వై1)",
-            "x2": "X2 (ఎక్స్2)",
-            "y2": "Y2 (వై2)"
-        }, inplace=True)
-
         st.dataframe(df)
 
         st.download_button(
@@ -143,4 +148,4 @@ if video and st.session_state.run:
             "text/csv"
         )
     else:
-        st.warning("No objects detected in video.")
+        st.warning("No objects detected.")
