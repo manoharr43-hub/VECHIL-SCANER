@@ -1,3 +1,3 @@
 git add requirements.txt
-git commit -m "Cleaned requirements and added opencv-python-headless"
+git commit -m "Fixed cv2 ImportError with opencv-python-headless"
 git push origin main
