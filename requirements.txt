@@ -4,3 +4,10 @@ opencv-python-headless==4.9.0.80
 pandas
 torch==2.1.0
 torchvision==0.16.0
+
+ultralytics
+opencv-python-headless
+streamlit
+pandas
+torch
+torchvision
