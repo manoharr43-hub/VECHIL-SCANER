@@ -1,30 +1,77 @@
 import streamlit as st
+import cv2
+import numpy as np
+import pandas as pd
 
-st.set_page_config(page_title="🚗 Vehicle Wire Scan Prototype", layout="wide")
-st.title("🔌 Vehicle Wire Continuity Screener")
-
-# =============================
-# Text + Number Inputs
-# =============================
-wire_id = st.text_input("Enter Wire Name (e.g., Engine_Main)")
-voltage = st.number_input("Enter Voltage (V)", min_value=0.0, max_value=15.0, step=0.1)
-resistance = st.number_input("Enter Resistance (Ω)", min_value=0.0, max_value=10.0, step=0.1)
+st.set_page_config(page_title="🚗 Vehicle Wire Video Scanner", layout="wide")
+st.title("🔌 Vehicle Wire Continuity Screener (Video + Report)")
 
 # =============================
-# Wire Continuity Check Logic
+# Upload Video
 # =============================
-def check_wire_status(voltage, resistance):
-    if voltage < 11.0 or resistance > 3.0:
+video_file = st.file_uploader("Upload Vehicle Inspection Video", type=["mp4", "avi", "mov"])
+
+# =============================
+# Wire Cut Detection Logic
+# =============================
+def detect_wire_cut(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    # Simple heuristic: if too few edges, assume cut/damage
+    edge_count = np.sum(edges > 0)
+    if edge_count < 5000:   # threshold tune చేయాలి
         return "CUT / DAMAGE", "red"
     else:
         return "NORMAL", "green"
 
 # =============================
-# Display Result
+# Process Video
 # =============================
-if wire_id:
-    status, color = check_wire_status(voltage, resistance)
-    st.subheader(f"Wire: {wire_id}")
-    st.metric("Voltage (V)", voltage)
-    st.metric("Resistance (Ω)", resistance)
-    st.markdown(f"**Status:** <span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
+report_data = []
+if video_file is not None:
+    cap = cv2.VideoCapture(video_file.name)
+    frame_id = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        status, color = detect_wire_cut(frame)
+        report_data.append({"Frame": frame_id, "Status": status})
+        frame_id += 1
+    cap.release()
+
+    # =============================
+    # Report Display
+    # =============================
+    df = pd.DataFrame(report_data)
+    st.dataframe(df)
+
+    # Summary
+    total_frames = len(df)
+    cut_frames = len(df[df["Status"] == "CUT / DAMAGE"])
+    normal_frames = total_frames - cut_frames
+    damage_pct = (cut_frames / total_frames) * 100 if total_frames > 0 else 0
+
+    st.subheader("📊 Evaluation Report")
+    st.write(f"Total Frames: {total_frames}")
+    st.write(f"Normal Frames: {normal_frames}")
+    st.write(f"Cut/Damage Frames: {cut_frames}")
+    st.write(f"Damage Percentage: {damage_pct:.2f}%")
+
+    # =============================
+    # Export Options
+    # =============================
+    st.download_button("⬇️ Export Report (Excel)", 
+                       df.to_csv(index=False).encode("utf-8"), 
+                       "wire_report.csv", "text/csv")
+
+    # Telugu + English Summary
+    st.markdown(f"""
+    **Report Summary (Telugu + English):**  
+    - మొత్తం ఫ్రేమ్స్: {total_frames}  
+    - సాధారణ ఫ్రేమ్స్: {normal_frames}  
+    - కట్/డ్యామేజ్ ఫ్రేమ్స్: {cut_frames}  
+    - డ్యామేజ్ శాతం: {damage_pct:.2f}%  
+
+    Vehicle wire harness shows {damage_pct:.2f}% damage in scanned video.
+    """)
