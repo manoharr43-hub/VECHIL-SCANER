@@ -1,4 +1,4 @@
-git add requirements.txt
-git commit -m "Fix: switched to opencv-python-headless to resolve libGL error"
+git add app.py requirements.txt
+git commit -m "Stable PRO+ version with headless OpenCV"
 git push origin main
 
