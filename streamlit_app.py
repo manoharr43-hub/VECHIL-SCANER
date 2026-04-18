@@ -8,50 +8,53 @@ import torch
 from datetime import datetime
 
 # =============================
-# CONFIG & PAGE SETUP
+# 1. పేజీ సెటప్
 # =============================
-st.set_page_config(page_title="AI Vehicle Internal Scanner", layout="wide")
-st.title("🚗 AI Vehicle Scanner (Damage & Wire-Cut Detector)")
-st.write("సాధారణ మొబైల్ వీడియో ద్వారా వాహన డ్యామేజ్ మరియు వైర్ కట్స్ గుర్తించండి.")
+st.set_page_config(page_title="AI Vehicle Scanner PRO", layout="wide")
+st.title("🚗 AI Vehicle Scanner & Damage Tracker")
+st.write("సాధారణ మొబైల్ వీడియోను అప్‌లోడ్ చేసి వాహనాలను మరియు డ్యామేజ్‌లను స్కాన్ చేయండి.")
 
 # =============================
-# LOAD CUSTOM MODEL
+# 2. మోడల్ లోడింగ్ (best.pt లేకపోయినా పనిచేస్తుంది)
 # =============================
 @st.cache_resource
 def load_model():
-    # ఒకవేళ మీ దగ్గర damage_best.pt ఉంటే అది లోడ్ అవుతుంది, లేదంటే సాధారణ yolov8n
-    model_path = "best.pt" if os.path.exists("best.pt") else "yolov8n.pt"
-    return YOLO(model_path)
+    # best.pt ఉంటే అది తీసుకుంటుంది, లేదంటే yolov8n.pt డౌన్‌లోడ్ చేస్తుంది
+    if os.path.exists("best.pt"):
+        return YOLO("best.pt")
+    else:
+        return YOLO("yolov8n.pt") 
 
 model = load_model()
 CLASS_NAMES = model.names
 
 # =============================
-# SIDEBAR SETTINGS
+# 3. సైడ్‌బార్ సెట్టింగ్స్
 # =============================
-st.sidebar.header("🔍 Scan Settings")
-conf_threshold = st.sidebar.slider("Confidence (AI ఖచ్చితత్వం)", 0.1, 1.0, 0.3)
-# లోపలి భాగాలు స్కాన్ చేసేటప్పుడు కాన్ఫిడెన్స్ కొంచెం తక్కువ (0.3) ఉంటే వైర్లు బాగా దొరుకుతాయి.
+st.sidebar.header("⚙️ Settings")
+conf_threshold = st.sidebar.slider("AI Confidence", 0.1, 1.0, 0.3)
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # =============================
-# VIDEO UPLOAD
+# 4. వీడియో అప్‌లోడ్
 # =============================
-video_file = st.file_uploader("📂 Upload Mobile Video", type=["mp4", "mov", "avi"])
+video_file = st.file_uploader("📂 వీడియో ఫైల్‌ను ఇక్కడ అప్‌లోడ్ చేయండి", type=["mp4", "mov", "avi"])
 
-if video_file is not None:
-    # ప్రాసెసింగ్ బటన్
-    if st.button("🚀 Start AI Deep Scan"):
+if video_file:
+    if st.button("🚀 స్కాన్ ప్రారంభించు (Start Scan)"):
+        # టెంపరరీ ఫైల్ సేవింగ్
         tfile = tempfile.NamedTemporaryFile(delete=False)
         tfile.write(video_file.read())
         
         cap = cv2.VideoCapture(tfile.name)
         stframe = st.empty()
         
-        # డేటా సేవ్ చేయడానికి లిస్ట్
-        damage_data = []
+        # డేటా సేవింగ్ కోసం
+        scan_results = []
         frame_id = 0
         
-        st.info("🔎 కెమెరా లోపలి భాగాలను మరియు వైర్లను స్కాన్ చేస్తోంది...")
+        progress_bar = st.progress(0)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -59,75 +62,55 @@ if video_file is not None:
                 break
             
             frame_id += 1
-            # వేగం కోసం ప్రతి 5వ ఫ్రేమ్ మాత్రమే చెక్ చేస్తుంది
-            if frame_id % 5 != 0:
+            if frame_id % 5 != 0: # వేగం కోసం ప్రతి 5వ ఫ్రేమ్
                 continue
 
             # AI డిటెక్షన్
-            results = model.predict(frame, conf=conf_threshold, verbose=False)[0]
+            results = model.predict(frame, conf=conf_threshold, device=device, verbose=False)[0]
             
-            # రిజల్ట్స్ ప్రాసెసింగ్
             if len(results.boxes) > 0:
                 for box in results.boxes:
                     cls_id = int(box.cls[0])
                     label = CLASS_NAMES[cls_id]
                     conf = float(box.conf[0])
                     
-                    # మనం కేవలం డ్యామేజ్ లేదా వైర్ కట్లను మాత్రమే రిపోర్ట్ చేయాలి
-                    # (మీ మోడల్ క్లాస్ పేర్లను బట్టి ఇక్కడ పేర్లు మార్చుకోవాలి)
-                    is_damage = any(word in label.lower() for word in ["cut", "damage", "scratch", "dent", "wire"])
+                    # రిపోర్ట్ డేటా
+                    scan_results.append({
+                        "Frame": frame_id,
+                        "Object Detected": label,
+                        "Confidence": f"{conf:.2%}",
+                        "Time": datetime.now().strftime("%H:%M:%S")
+                    })
                     
-                    if is_damage:
-                        # డ్యామేజ్ ఉన్న ఫ్రేమ్ ని ఫోటోగా సేవ్ చేయడం
-                        timestamp = datetime.now().strftime("%H%M%S")
-                        img_name = f"damage_{frame_id}_{timestamp}.jpg"
-                        
-                        damage_data.append({
-                            "Frame": frame_id,
-                            "Detected Issue": label.upper(),
-                            "Confidence": f"{conf:.2%}",
-                            "Status": "⚠️ NEEDS REPAIR"
-                        })
-                        
-                        # బాక్సులను డ్రా చేయడం
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-                        cv2.putText(frame, f"ALERT: {label}", (x1, y1-10), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                    # స్క్రీన్ మీద డ్రాయింగ్
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, f"{label} {conf:.2f}", (x1, y1-10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            # వీడియోను యాప్‌లో చూపించడం
+            # వీడియో డిస్ప్లే
             stframe.image(frame, channels="BGR", use_container_width=True)
+            progress_bar.progress(min(frame_id / total_frames, 1.0))
 
         cap.release()
         os.remove(tfile.name)
-        
+
         # =============================
-        # FINAL ANALYSIS REPORT
+        # 5. ఫైనల్ రిపోర్ట్ జనరేషన్
         # =============================
-        st.divider()
-        st.subheader("📋 Final Inspection Report")
+        st.success("✅ స్కాన్ పూర్తయింది!")
         
-        if damage_data:
-            df = pd.DataFrame(damage_data)
+        if scan_results:
+            st.subheader("📊 Scan Analysis Report")
+            df = pd.DataFrame(scan_results)
             
-            # ఒకే రకమైన డ్యామేజ్ పదే పదే రాకుండా గ్రూప్ చేయడం
-            report_summary = df.drop_duplicates(subset=['Detected Issue'])
+            # సమ్మరీ (ఏవి ఎన్ని ఉన్నాయి)
+            summary = df['Object Detected'].value_counts()
+            st.bar_chart(summary)
             
-            # మెట్రిక్స్ చూపించడం
-            c1, c2 = st.columns(2)
-            c1.metric("Total Issues Found", len(report_summary))
-            c2.error("Critical Damage Detected: YES")
+            # డేటా టేబుల్
+            st.dataframe(df)
             
-            # రిపోర్ట్ టేబుల్
-            st.table(report_summary)
-            
-            # CSV డౌన్లోడ్
-            csv = report_summary.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Full Repair Report",
-                data=csv,
-                file_name='vehicle_damage_report.csv',
-                mime='text/csv',
-            )
-        else:
-            st.success("✅ స్కాన్ పూర్తయింది. వాహనం లోపల ఎలాంటి వైర్ కట్స్ లేదా డ్యామేజ్‌లు లేవు.")
+            # CSV డౌన్‌లోడ్
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 డౌన్‌లోడ్ రిపోర్ట్ (Download CSV)", data=csv, file_name="scan_report.csv")
