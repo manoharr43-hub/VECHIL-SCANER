@@ -1,190 +1,114 @@
 import streamlit as st
+from ultralytics import YOLO
 import cv2
-import numpy as np
-import pandas as pd
 import tempfile
-import os
+import pandas as pd
+import numpy as np
 
-st.set_page_config(page_title="🔥 Wire Scanner STABLE", layout="wide")
-st.title("🚗 Wire Scanner (Stable Detection Version)")
+# =========================
+# APP CONFIG
+# =========================
+st.set_page_config(page_title="🚗 Vehicle AI Scanner", layout="wide")
+st.title("🔥 REAL Vehicle Inner-Part AI System")
 
-# =============================
-# SIDEBAR
-# =============================
-st.sidebar.header("🔌 Internal Wire Test")
-continuity = st.sidebar.selectbox(
-    "Continuity Test Result",
-    ["NOT TESTED", "OK", "FAILED"]
-)
+st.markdown("Upload video → detect engine parts, wires, ECU, battery, damage")
 
-# =============================
-# UPLOAD
-# =============================
-video_file = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
+# =========================
+# LOAD MODEL
+# =========================
+MODEL_PATH = "best.pt"   # trained YOLO model
+model = YOLO(MODEL_PATH)
 
-# =============================
-# DETECTION FUNCTION
-# =============================
-def detect_wire(frame):
-    frame = cv2.resize(frame, (640, 360))
+# =========================
+# UPLOAD VIDEO
+# =========================
+video_file = st.file_uploader("Upload Vehicle Video", type=["mp4","avi","mov"])
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
+# =========================
+# PROCESS
+# =========================
+if video_file:
 
-    edges = cv2.Canny(gray, 50, 150)
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(video_file.read())
 
-    kernel = np.ones((3,3), np.uint8)
-    edges = cv2.dilate(edges, kernel, iterations=1)
+    cap = cv2.VideoCapture(tfile.name)
 
-    edge_pixels = np.sum(edges > 0)
-    total_pixels = edges.size
-    edge_density = edge_pixels / total_pixels
+    stframe = st.empty()
 
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    status = "OUTER OK"
-    boxes = []
-
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-
-        # 🔥 Strong filtering
-        if area > 1500:
-            x, y, w, h = cv2.boundingRect(cnt)
-
-            ratio = w / h if h != 0 else 0
-
-            # 🔥 Shape + size filter
-            if (w < 80 or h < 40) and (0.2 < ratio < 5) and edge_density < 0.02:
-                status = "OUTER DAMAGE"
-                boxes.append((x, y, w, h))
-
-    return status, boxes, frame
-
-# =============================
-# PROCESS VIDEO
-# =============================
-report_data = []
-damage_flags = []
-
-if video_file is not None:
-    temp_video = tempfile.NamedTemporaryFile(delete=False)
-    temp_video.write(video_file.read())
-    temp_video.close()
-
-    cap = cv2.VideoCapture(temp_video.name)
-
+    log_data = []
     frame_id = 0
-    display = st.empty()
 
-    damage_streak = 0  # 🔥 continuous detection
+    st.success("AI Processing Started 🚀")
+
+    damage_count = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        if frame_id % 5 != 0:
-            frame_id += 1
-            continue
+        # YOLO prediction
+        results = model(frame)
 
-        status, boxes, output_frame = detect_wire(frame)
+        annotated = results[0].plot()
 
-        # =============================
-        # 🔥 STABILITY LOGIC
-        # =============================
-        if status == "OUTER DAMAGE":
-            damage_streak += 1
-        else:
-            damage_streak = 0
+        # =========================
+        # LOGGING DETECTIONS
+        # =========================
+        if results[0].boxes is not None:
+            for box in results[0].boxes.data:
+                x1, y1, x2, y2, conf, cls = box
+                log_data.append({
+                    "frame": frame_id,
+                    "class": int(cls),
+                    "confidence": float(conf)
+                })
 
-        confirmed = damage_streak >= 3
+                # damage class example (class 5 = damaged_wire)
+                if int(cls) == 5:
+                    damage_count += 1
 
-        final_status = "OUTER DAMAGE" if confirmed else "OUTER OK"
-
-        damage_flag = 1 if confirmed else 0
-        damage_flags.append(damage_flag)
-
-        # =============================
-        # DRAW BOX ONLY IF CONFIRMED
-        # =============================
-        if confirmed:
-            for (x, y, w, h) in boxes:
-                cv2.rectangle(output_frame, (x,y), (x+w,y+h), (0,0,255), 2)
-
-            # alert only once per streak
-            if damage_streak == 3:
-                st.warning(f"⚠️ Confirmed Damage at frame {frame_id}")
-
-        # display text
-        cv2.putText(output_frame, final_status, (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1,
-                    (0,0,255) if confirmed else (0,255,0), 2)
-
-        display.image(output_frame, channels="BGR")
-
-        report_data.append({
-            "Frame": frame_id,
-            "Status": final_status
-        })
+        # =========================
+        # SHOW VIDEO
+        # =========================
+        stframe.image(annotated, channels="BGR", use_container_width=True)
 
         frame_id += 1
 
     cap.release()
-    os.remove(temp_video.name)
 
-    df = pd.DataFrame(report_data)
+    # =========================
+    # REPORT
+    # =========================
+    df = pd.DataFrame(log_data)
+
+    st.subheader("📊 Detection Report")
     st.dataframe(df)
 
-    # =============================
-    # FINAL DECISION
-    # =============================
-    outer_damage = len(df[df["Status"] == "OUTER DAMAGE"])
+    # =========================
+    # FINAL RESULT
+    # =========================
+    st.subheader("📌 Final Status")
 
-    if continuity == "FAILED":
-        final_status = "🔴 INTERNAL DAMAGE"
-    elif outer_damage > 5:
-        final_status = "🟠 OUTER DAMAGE"
-    elif continuity == "OK":
-        final_status = "🟢 FULLY OK"
+    if damage_count > 10:
+        status = "🔴 HEAVY DAMAGE DETECTED"
+    elif damage_count > 0:
+        status = "🟠 MINOR DAMAGE DETECTED"
     else:
-        final_status = "⚠️ TEST INCOMPLETE"
+        status = "🟢 NO DAMAGE FOUND"
 
-    # =============================
-    # REPORT
-    # =============================
-    st.subheader("📊 Final Report")
+    st.write("Damage Score:", damage_count)
+    st.write("Status:", status)
 
-    st.write(f"Outer Damage Frames: {outer_damage}")
-    st.write(f"Internal Test: {continuity}")
-    st.write(f"Final Status: {final_status}")
-
-    # =============================
-    # GRAPH
-    # =============================
-    st.subheader("📈 Damage Timeline")
-    st.line_chart(pd.DataFrame({"Damage": damage_flags}))
-
-    # =============================
-    # DOWNLOAD
-    # =============================
+    # =========================
+    # DOWNLOAD REPORT
+    # =========================
     st.download_button(
-        "⬇️ Download CSV",
-        df.to_csv(index=False).encode("utf-8"),
-        "wire_report.csv",
+        "⬇️ Download CSV Report",
+        df.to_csv(index=False).encode(),
+        "vehicle_ai_report.csv",
         "text/csv"
     )
 
-    # =============================
-    # SUMMARY
-    # =============================
-    st.markdown(f"""
-    ### 📋 Summary
-
-    - బయట డ్యామేజ్ ఫ్రేమ్స్: {outer_damage}  
-    - లోపల టెస్ట్: {continuity}  
-    - Final Result: {final_status}  
-
-    ✅ False detection minimized  
-    ✅ Stable detection applied
-    """)
+    st.success("Processing Completed 🚀")
