@@ -8,10 +8,16 @@ import pandas as pd
 # CONFIG
 # =============================
 st.set_page_config(page_title="Vehicle AI Scanner PRO", layout="wide")
-st.title("🚗 Vehicle AI Scanner (FINAL FAST VERSION)")
+st.title("🚗 Vehicle AI Scanner (STABLE PRO VERSION)")
 
 # =============================
-# LOAD MODEL (CACHE FIX)
+# SESSION STATE CONTROL
+# =============================
+if "run" not in st.session_state:
+    st.session_state.run = False
+
+# =============================
+# LOAD MODEL
 # =============================
 @st.cache_resource
 def load_model():
@@ -24,19 +30,30 @@ model = load_model()
 # =============================
 video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
-start = st.button("▶️ Start Processing")
-stop = st.button("🛑 Stop")
+col1, col2 = st.columns(2)
+
+with col1:
+    start = st.button("▶️ Start Processing")
+
+with col2:
+    stop = st.button("🛑 Stop")
+
+if start:
+    st.session_state.run = True
+
+if stop:
+    st.session_state.run = False
 
 # =============================
-# MAIN PROCESS
+# PROCESSING
 # =============================
-if video and start:
+if video and st.session_state.run:
 
     temp = tempfile.NamedTemporaryFile(delete=False)
     temp.write(video.read())
-    temp.close()
+    temp_path = temp.name
 
-    cap = cv2.VideoCapture(temp.name)
+    cap = cv2.VideoCapture(temp_path)
 
     stframe = st.empty()
     progress = st.progress(0)
@@ -46,27 +63,23 @@ if video and start:
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    st.info("Processing started... Please wait ⏳")
+    st.info("Processing started... 🚀")
 
-    # =============================
-    # SAFE LOOP (NO FREEZE)
-    # =============================
-    while True:
-
-        if stop:
-            st.warning("Stopped by user 🛑")
-            break
+    while cap.isOpened() and st.session_state.run:
 
         ret, frame = cap.read()
         if not ret:
             break
 
-        # YOLO PREDICTION (FAST MODE)
+        # 🔥 SKIP FRAMES FOR SPEED
+        if frame_id % 2 != 0:
+            frame_id += 1
+            continue
+
         results = model(frame, imgsz=512, conf=0.4, verbose=False)
         result = results[0]
         output = result.plot()
 
-        # SAFE BOX HANDLING
         if result.boxes is not None and len(result.boxes) > 0:
             boxes = result.boxes.data.cpu().numpy()
 
@@ -81,22 +94,22 @@ if video and start:
                     "y2": float(box[3]),
                 })
 
-        # SHOW FRAME (FAST UI)
-        if frame_id % 10 == 0:
+        # UI update every 5 frames
+        if frame_id % 5 == 0:
             stframe.image(output, channels="BGR", use_container_width=True)
 
         frame_id += 1
 
-        # progress bar
         if total_frames > 0:
             progress.progress(min(frame_id / total_frames, 1.0))
 
-        # LIMIT (PREVENT HANG)
-        if frame_id > 300:
-            st.warning("Frame limit reached (FAST MODE)")
+        # Safety limit
+        if frame_id > 500:
+            st.warning("Frame limit reached (SAFE MODE)")
             break
 
     cap.release()
+    st.success("Processing completed ✅")
 
     # =============================
     # REPORT
