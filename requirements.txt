@@ -1,5 +1,9 @@
-streamlit==1.32.2
+streamlit==1.56.0
 ultralytics==8.0.196
 opencv-python-headless==4.8.1.78
-pandas
-numpy
+pandas==3.0.2
+numpy==2.4.4
+pyserial==3.5
+matplotlib==3.10.8
+scipy==1.17.1
+seaborn==0.13.2
