@@ -4,254 +4,201 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
+import os
 
 # =============================
 # CONFIG
 # =============================
-st.set_page_config(page_title="🔥 NSE AI PRO V9.2", layout="wide")
-st.title("🚀 NSE AI PRO V9.2 (FINAL STABLE)")
-st.markdown("---")
+st.set_page_config(page_title="🔥 NSE AI PRO V21 HQ", layout="wide")
+st.title("🚀 NSE AI PRO V21 - High Quality Trade System (Reversal Detection)")
+
+st_autorefresh(interval=60000, key="refresh")
 
 # =============================
-# SAFE SESSION INIT
+# BACKTEST FOLDER
 # =============================
-if "live_big" not in st.session_state:
-    st.session_state.live_big = []
-
-if "strength" not in st.session_state:
-    st.session_state.strength = pd.DataFrame()
+BACKTEST_DIR = "backtests"
+os.makedirs(BACKTEST_DIR, exist_ok=True)
 
 # =============================
-# SECTOR STOCK LIST
+# SESSION
 # =============================
-BANKING = ["HDFCBANK","ICICIBANK","SBIN","KOTAKBANK","AXISBANK","INDUSINDBK","BANKBARODA","PNB"]
-IT = ["TCS","INFY","WIPRO","HCLTECH","TECHM","LTIM","PERSISTENT"]
-OIL = ["RELIANCE","ONGC","IOC","BPCL","HPCL"]
-AUTO = ["MARUTI","TATAMOTORS","M&M","HEROMOTOCO","BAJAJ-AUTO"]
-INFRA = ["LT","ULTRACEMCO","JSWSTEEL","TATASTEEL","HINDALCO"]
-PHARMA = ["SUNPHARMA","DRREDDY","CIPLA","DIVISLAB"]
-FMCG = ["HINDUNILVR","ITC","NESTLEIND","BRITANNIA"]
+if "signals" not in st.session_state:
+    st.session_state.signals = []
 
+# =============================
+# SECTOR MAP
+# =============================
 sector_map = {
-    "ALL": list(set(BANKING + IT + OIL + AUTO + INFRA + PHARMA + FMCG)),
-    "BANKING": BANKING,
-    "IT": IT,
-    "OIL": OIL,
-    "AUTO": AUTO,
-    "INFRA": INFRA,
-    "PHARMA": PHARMA,
-    "FMCG": FMCG
+    "Banking": ["HDFCBANK","ICICIBANK","SBIN","AXISBANK","KOTAKBANK"],
+    "IT": ["INFY","TCS","HCLTECH","WIPRO","TECHM"],
+    "Auto": ["MARUTI","M&M","TATAMOTORS","HEROMOTOCO"],
+    "FMCG": ["ITC","HINDUNILVR","NESTLEIND"],
+    "Oil": ["RELIANCE","ONGC","BPCL"],
+    "Metals": ["TATASTEEL","JSWSTEEL","HINDALCO"],
 }
 
-selected_sector = st.selectbox("📊 Select Sector", sector_map.keys())
-stocks = sector_map[selected_sector]
+sector = st.sidebar.selectbox("📂 Sector", list(sector_map.keys()))
+stocks = sector_map[sector]
 
 # =============================
-# TIME FORMAT
-# =============================
-def clean_time(ts):
-    return pd.to_datetime(ts).strftime("%I:%M %p").lstrip("0")
-
-# =============================
-# LOAD DATA
+# DATA
 # =============================
 @st.cache_data(ttl=60)
-def load_data(stock, period="1d"):
-    df = yf.Ticker(stock + ".NS").history(period=period, interval="5m")
-    if df.empty:
-        return pd.DataFrame()
-    return df.between_time("09:15","15:30")
+def load_data(stock, interval="5m", period="5d"):
+    df = yf.Ticker(stock + ".NS").history(period=period, interval=interval)
+    return df
 
 # =============================
-# BIG PLAYER LOGIC
+# INDICATORS
 # =============================
-def big_player(df, stock):
-    if df.empty or len(df) < 25:
-        return []
-
+def indicators(df):
     df = df.copy()
-    df['AvgVol'] = df['Volume'].rolling(20).mean()
-    df['Spike'] = df['Volume'] > df['AvgVol'] * 2
-    df['Move'] = df['Close'].diff()
     df['EMA20'] = df['Close'].ewm(span=20).mean()
+    df['EMA50'] = df['Close'].ewm(span=50).mean()
+    df['EMA200'] = df['Close'].ewm(span=200).mean()
+    tp = (df['High'] + df['Low'] + df['Close']) / 3
+    df['VWAP'] = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    rs = gain.rolling(14).mean() / (loss.rolling(14).mean() + 1e-9)
+    df['RSI'] = 100 - (100 / (1 + rs))
+    df['AvgVol'] = df['Volume'].rolling(20).mean()
+    return df
 
-    entries = []
-
-    for i in range(20, len(df)):
+# =============================
+# REVERSAL DETECTION
+# =============================
+def detect_reversal(df, stock):
+    df = indicators(df)
+    signals = []
+    for i in range(50, len(df)):
         price = df['Close'].iloc[i]
-        ema = df['EMA20'].iloc[i]
+        prev_price = df['Close'].iloc[i-1]
+        rsi = df['RSI'].iloc[i]
+        ema20 = df['EMA20'].iloc[i]
+        ema50 = df['EMA50'].iloc[i]
+        ema200 = df['EMA200'].iloc[i]
 
-        if df['Spike'].iloc[i] and df['Move'].iloc[i] > 0 and price > ema:
-            entries.append({
-                "Stock": stock,
-                "Type": "BIG BUY",
-                "Price": price,
-                "TimeRaw": df.index[i],
-                "Time": clean_time(df.index[i])
-            })
+        if prev_price < ema20 and price > ema20 and rsi > 35 and ema20 > ema50:
+            signals.append({"Stock":stock,"Type":"Bullish Reversal","Price":price,"Time":df.index[i]})
 
-        elif df['Spike'].iloc[i] and df['Move'].iloc[i] < 0 and price < ema:
-            entries.append({
-                "Stock": stock,
-                "Type": "BIG SELL",
-                "Price": price,
-                "TimeRaw": df.index[i],
-                "Time": clean_time(df.index[i])
-            })
+        elif prev_price > ema20 and price < ema20 and rsi < 65 and ema20 < ema50:
+            signals.append({"Stock":stock,"Type":"Bearish Reversal","Price":price,"Time":df.index[i]})
 
-    return entries
+    return signals[-10:]
 
 # =============================
-# STRENGTH
+# LIVE SYSTEM
 # =============================
-def strength_meter(df):
-    if df.empty:
-        return 0
-    return (df['Close'].iloc[-1] - df['Close'].iloc[0]) / df['Close'].iloc[0]
-
-# =============================
-# LIVE
-# =============================
-if st.button("🔍 START LIVE"):
-
-    all_big = []
-    strength_data = []
-
+if st.button("🚀 START HQ LIVE TRADING"):
+    all_signals = []
     for s in stocks:
-        try:
-            df = load_data(s)
-
-            if df.empty:
-                continue
-
-            all_big += big_player(df, s)
-
-            strength_data.append({
-                "Stock": s,
-                "Strength": strength_meter(df)
-            })
-
-        except:
-            pass
-
-    all_big = sorted(all_big, key=lambda x: x["TimeRaw"])
-    strength_df = pd.DataFrame(strength_data).sort_values(by="Strength", ascending=False)
-
-    st.session_state.live_big = all_big
-    st.session_state.strength = strength_df
+        df = load_data(s, "5m", "5d")
+        signals = detect_reversal(df, s)
+        all_signals.extend(signals)
+    st.session_state.signals = all_signals
 
 # =============================
-# LIVE DISPLAY
+# DISPLAY + LIVE CHART
 # =============================
-if len(st.session_state.live_big) > 0:
+if st.session_state.signals:
+    df_sig = pd.DataFrame(st.session_state.signals)
+    df_sig["Time"] = pd.to_datetime(df_sig["Time"]).dt.strftime("%I:%M %p")
+    df_sig = df_sig.sort_values(by="Time").reset_index(drop=True)
 
-    st.subheader("🐋 BIG PLAYER")
-    st.dataframe(pd.DataFrame(st.session_state.live_big)[["Stock","Type","Price","Time"]])
+    st.subheader("🔄 Reversal Detection Signals")
+    st.dataframe(df_sig[["Stock","Type","Price","Time"]])
 
-    if not st.session_state.strength.empty:
-        st.subheader("🔥 STRONG STOCKS")
-        st.dataframe(st.session_state.strength.head(5))
+    stock = st.selectbox("📊 Chart", stocks)
+    df_chart = load_data(stock, "5m", "5d")   # 👉 LIVE chart కూడా 5m intervalలో ఉండాలి
 
-        st.subheader("❄️ WEAK STOCKS")
-        st.dataframe(st.session_state.strength.tail(5))
+    if not df_chart.empty:
+        fig = go.Figure(data=[go.Candlestick(
+            x=df_chart.index,
+            open=df_chart['Open'],
+            high=df_chart['High'],
+            low=df_chart['Low'],
+            close=df_chart['Close']
+        )])
 
-    # CHART
-    stock = st.selectbox("📈 Chart", stocks)
+        df_s = df_sig[df_sig["Stock"]==stock]
+        if not df_s.empty:
+            for _, r in df_s.iterrows():
+                fig.add_trace(go.Scatter(
+                    x=[r["Time"]],
+                    y=[r["Price"]],
+                    mode="markers",
+                    marker=dict(size=12, color="blue" if "Bullish" in r["Type"] else "orange"),
+                    name=r["Type"]
+                ))
 
-    df_chart = load_data(stock)
-
-    fig = go.Figure(data=[go.Candlestick(
-        x=df_chart.index,
-        open=df_chart['Open'],
-        high=df_chart['High'],
-        low=df_chart['Low'],
-        close=df_chart['Close']
-    )])
-
-    df_big = pd.DataFrame(st.session_state.live_big)
-    df_big = df_big[df_big["Stock"] == stock]
-
-    for _, row in df_big.iterrows():
-        fig.add_trace(go.Scatter(
-            x=[row["TimeRaw"]],
-            y=[row["Price"]],
-            mode="markers+text",
-            marker=dict(
-                size=10,
-                color="green" if row["Type"] == "BIG BUY" else "red"
-            ),
-            text=[row["Type"]],
-            textposition="top center"
-        ))
-
-    st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(title=f"{stock} - Live Reversal Chart", 
+                          xaxis_title="Time", yaxis_title="Price")
+        st.plotly_chart(fig, use_container_width=True)
 
 # =============================
 # BACKTEST
 # =============================
-if st.checkbox("📊 Enable Backtest"):
-
-    bt_date = st.date_input("Select Date", datetime.now().date() - timedelta(days=1))
-
-    bt_big = []
+if st.checkbox("📊 BACKTEST MODE"):
+    date = st.date_input("Select Date", datetime.now().date() - timedelta(days=1))
+    bt_all = []
 
     for s in stocks:
-        try:
-            df = yf.Ticker(s + ".NS").history(
-                start=bt_date,
-                end=bt_date + timedelta(days=1),
-                interval="5m"
-            )
+        df = yf.Ticker(s + ".NS").history(period="5d", interval="5m")
+        df = df[df.index.date == date]
 
-            df = df.between_time("09:15", "15:30")
+        if not df.empty:
+            signals = detect_reversal(df, s)
+            bt_all.extend(signals)
 
-            if df.empty:
-                continue
+            # Save signals to CSV in backtest folder
+            if signals:
+                df_save = pd.DataFrame(signals)
+                filename = f"{BACKTEST_DIR}/backtest_{s}_{date}.csv"
+                df_save.to_csv(filename, index=False)
 
-            bt_big += big_player(df, s)
+            fig_bt = go.Figure(data=[go.Candlestick(
+                x=df.index,
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close']
+            )])
 
-        except:
-            pass
+            df_s = pd.DataFrame(signals)
+            if not df_s.empty:
+                for _, r in df_s.iterrows():
+                    fig_bt.add_trace(go.Scatter(
+                        x=[r["Time"]],
+                        y=[r["Price"]],
+                        mode="markers",
+                        marker=dict(size=12, color="blue" if "Bullish" in r["Type"] else "orange"),
+                        name=f"{s} {r['Type']}"
+                    ))
 
-    bt_big = sorted(bt_big, key=lambda x: x["TimeRaw"])
+            fig_bt.update_layout(title=f"{s} - Backtest Reversal Chart ({date})",
+                                 xaxis_title="Time", yaxis_title="Price")
+            st.plotly_chart(fig_bt, use_container_width=True)
 
-    if len(bt_big) > 0:
-        st.subheader("🐋 BACKTEST BIG PLAYER")
-        st.dataframe(pd.DataFrame(bt_big)[["Stock","Type","Price","Time"]])
+    st.subheader("📊 BACKTEST RESULTS")
+    if bt_all:
+        df_bt = pd.DataFrame(bt_all)
+        df_bt["Time"] = pd.to_datetime(df_bt["Time"]).dt.strftime("%I:%M %p")
+        df_bt = df_bt.sort_values(by="Time").reset_index(drop=True)
+        st.dataframe(df_bt[["Stock","Type","Price","Time"]])
+    else:
+        st.warning("No signals found for selected date")
 
-    # BACKTEST CHART
-    stock = st.selectbox("📉 Backtest Chart", stocks)
-
-    df_chart = yf.Ticker(stock + ".NS").history(
-        start=bt_date,
-        end=bt_date + timedelta(days=1),
-        interval="5m"
-    )
-
-    df_chart = df_chart.between_time("09:15", "15:30")
-
-    fig = go.Figure(data=[go.Candlestick(
-        x=df_chart.index,
-        open=df_chart['Open'],
-        high=df_chart['High'],
-        low=df_chart['Low'],
-        close=df_chart['Close']
-    )])
-
-    df_bt = pd.DataFrame(bt_big)
-    df_bt = df_bt[df_bt["Stock"] == stock]
-
-    for _, row in df_bt.iterrows():
-        fig.add_trace(go.Scatter(
-            x=[row["TimeRaw"]],
-            y=[row["Price"]],
-            mode="markers+text",
-            marker=dict(
-                size=12,
-                color="green" if row["Type"] == "BIG BUY" else "red"
-            ),
-            text=[row["Type"]],
-            textposition="top center"
-        ))
-
-    st.plotly_chart(fig, use_container_width=True)
+# =============================
+# BACKTEST FOLDER DISPLAY
+# =============================
+st.sidebar.subheader("📂 Backtest Folder Contents")
+files = os.listdir(BACKTEST_DIR)
+if files:
+    for f in files:
+        st.sidebar.write(f)
+else:
+    st.sidebar.write("No backtest files yet")
